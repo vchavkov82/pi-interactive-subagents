@@ -102,6 +102,48 @@ function formatElapsed(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)}KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(1)}MB`;
+}
+
+/**
+ * Try to find and measure the sub-agent's session file.
+ * Returns { entries, bytes } or null if not found yet.
+ */
+function measureSessionProgress(
+  sessionDir: string,
+  existingFiles: Set<string>,
+  forkedSessionFile: string | null,
+): { entries: number; bytes: number } | null {
+  try {
+    if (forkedSessionFile) {
+      const stat = statSync(forkedSessionFile);
+      const raw = readFileSync(forkedSessionFile, "utf8");
+      const entries = raw.split("\n").filter((l) => l.trim()).length;
+      return { entries, bytes: stat.size };
+    }
+    // Find the newest session file that wasn't there before
+    const newFiles = readdirSync(sessionDir)
+      .filter((f) => f.endsWith(".jsonl") && !existingFiles.has(f))
+      .map((f) => {
+        const p = join(sessionDir, f);
+        return { path: p, mtime: statSync(p).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    if (newFiles.length === 0) return null;
+    const stat = statSync(newFiles[0].path);
+    const raw = readFileSync(newFiles[0].path, "utf8");
+    const entries = raw.split("\n").filter((l) => l.trim()).length;
+    return { entries, bytes: stat.size };
+  } catch {
+    return null;
+  }
+}
+
 export default function subagentsExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent",
@@ -151,6 +193,21 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
       let surface: string | null = null;
 
+      // Helper to emit progress updates during setup and polling
+      const emitProgress = (phase: string, extra?: Record<string, unknown>) => {
+        onUpdate?.({
+          content: [{ type: "text", text: phase }],
+          details: {
+            name: params.name,
+            interactive,
+            task: params.task,
+            startTime,
+            phase,
+            ...extra,
+          },
+        });
+      };
+
       try {
 
         // Record existing session files BEFORE spawning so we can identify
@@ -159,6 +216,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const existingSessionFiles = new Set(
           readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl"))
         );
+
+        emitProgress("Creating terminal…");
 
         // Create cmux surface
         surface = createSurface(params.name);
@@ -182,6 +241,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const fullTask =
           `${roleBlock}\n\n${modeHint}\n\n${params.task}\n\n${summaryInstruction}`;
 
+        const contextBytes = Buffer.byteLength(fullTask, "utf8");
+        emitProgress(`Preparing context (${formatBytes(contextBytes)})…`);
+
         // Build pi command
         const parts: string[] = ["pi"];
 
@@ -190,8 +252,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // Default: fresh session — avoids overwhelming the agent in long sessions.
         let forkedSessionFile: string | null = null;
         if (params.fork) {
+          emitProgress("Forking session…");
           const { copySessionFile } = await import("./session.ts");
           forkedSessionFile = copySessionFile(sessionFile, dirname(sessionFile));
+          const forkSize = statSync(forkedSessionFile).size;
+          emitProgress(`Session forked (${formatBytes(forkSize)})…`);
           parts.push("--session", shellEscape(forkedSessionFile));
         } else {
           parts.push("--session-dir", shellEscape(dirname(sessionFile)));
@@ -224,10 +289,15 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // skills + task can easily exceed that when passed as a CLI argument.
         // Skills go as separate /skill:name messages so pi renders them
         // as proper skill invocation blocks, not buried in the task file.
+        const skillNames: string[] = [];
         if (effectiveSkills) {
           for (const skill of effectiveSkills.split(",").map((s) => s.trim()).filter(Boolean)) {
+            skillNames.push(skill);
             parts.push(shellEscape(`/skill:${skill}`));
           }
+        }
+        if (skillNames.length > 0) {
+          emitProgress(`Loading skills: ${skillNames.join(", ")}…`);
         }
 
         const taskFile = join(tmpdir(), `subagent-task-${Date.now()}.md`);
@@ -237,24 +307,47 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const piCommand = parts.join(" ");
         const command = `${piCommand}; rm -f ${shellEscape(taskFile)}; echo '__SUBAGENT_DONE_'${exitStatusVar()}'__'`;
 
+        emitProgress("Starting session…");
+
         // Send to surface
         sendCommand(surface, command);
 
         // Poll for exit
         const interval = interactive ? 3000 : 1000;
+        let sessionDetected = false;
 
         const exitCode = await pollForExit(surface, signal ?? new AbortController().signal, {
           interval,
           onTick() {
-            onUpdate?.({
-              content: [{ type: "text", text: `${formatElapsed(Math.floor((Date.now() - startTime) / 1000))} elapsed` }],
-              details: {
-                name: params.name,
-                interactive,
-                task: params.task,
-                startTime,
-              },
-            });
+            const elapsed = formatElapsed(Math.floor((Date.now() - startTime) / 1000));
+            const progress = measureSessionProgress(sessionDir, existingSessionFiles, forkedSessionFile);
+
+            if (progress) {
+              sessionDetected = true;
+              onUpdate?.({
+                content: [{ type: "text", text: `${elapsed} elapsed` }],
+                details: {
+                  name: params.name,
+                  interactive,
+                  task: params.task,
+                  startTime,
+                  phase: "running",
+                  sessionEntries: progress.entries,
+                  sessionBytes: progress.bytes,
+                },
+              });
+            } else {
+              onUpdate?.({
+                content: [{ type: "text", text: `${elapsed} elapsed` }],
+                details: {
+                  name: params.name,
+                  interactive,
+                  task: params.task,
+                  startTime,
+                  phase: "loading",
+                },
+              });
+            }
           },
         });
 
@@ -353,17 +446,38 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       const interactive = details?.interactive !== false;
 
       if (isPartial) {
-        // Show progress/instructions while running
         const startTime: number | undefined = details?.startTime;
+        const phase: string | undefined = details?.phase;
+        const sessionEntries: number | undefined = details?.sessionEntries;
+        const sessionBytes: number | undefined = details?.sessionBytes;
+
+        const icon = interactive ? "▸" : "▹";
+
+        // Setup phases (before polling starts)
+        if (phase && phase !== "running" && phase !== "loading") {
+          let text =
+            `${icon} ` +
+            theme.fg("toolTitle", theme.bold(name)) +
+            theme.fg("dim", ` — ${phase}`);
+          return new Text(text, 0, 0);
+        }
+
         const elapsedText = startTime
           ? formatElapsed(Math.floor((Date.now() - startTime) / 1000))
           : "running…";
 
-        const icon = interactive ? "▸" : "▹";
+        // Build status line with session progress
+        let statusSuffix = "";
+        if (phase === "loading") {
+          statusSuffix = " · loading…";
+        } else if (sessionEntries != null && sessionBytes != null) {
+          statusSuffix = ` · ${sessionEntries} messages (${formatBytes(sessionBytes)})`;
+        }
+
         let text =
           `${icon} ` +
           theme.fg("toolTitle", theme.bold(name)) +
-          theme.fg("dim", ` — ${elapsedText}`);
+          theme.fg("dim", ` — ${elapsedText}${statusSuffix}`);
 
         if (interactive) {
           text +=
@@ -563,13 +677,21 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
       if (isPartial) {
         const startTime: number | undefined = details?.startTime;
+        const sessionEntries: number | undefined = details?.sessionEntries;
+        const sessionBytes: number | undefined = details?.sessionBytes;
         const elapsedText = startTime
           ? formatElapsed(Math.floor((Date.now() - startTime) / 1000))
           : "running…";
+
+        let statusSuffix = "";
+        if (sessionEntries != null && sessionBytes != null) {
+          statusSuffix = ` · ${sessionEntries} messages (${formatBytes(sessionBytes)})`;
+        }
+
         let text =
           "▸ " +
           theme.fg("toolTitle", theme.bold(name)) +
-          theme.fg("dim", ` — ${elapsedText}`);
+          theme.fg("dim", ` — ${elapsedText}${statusSuffix}`);
         text +=
           "\n" +
           theme.fg("accent", `Switch to the "${name}" terminal. `) +
@@ -661,9 +783,25 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const exitCode = await pollForExit(surface, signal ?? new AbortController().signal, {
           interval: 3000,
           onTick() {
+            const elapsed = formatElapsed(Math.floor((Date.now() - startTime) / 1000));
+            let sessionEntries: number | undefined;
+            let sessionBytes: number | undefined;
+            try {
+              const stat = statSync(params.sessionPath);
+              const raw = readFileSync(params.sessionPath, "utf8");
+              sessionEntries = raw.split("\n").filter((l) => l.trim()).length;
+              sessionBytes = stat.size;
+            } catch {}
             onUpdate?.({
-              content: [{ type: "text", text: `${formatElapsed(Math.floor((Date.now() - startTime) / 1000))} elapsed` }],
-              details: { name, sessionPath: params.sessionPath, startTime },
+              content: [{ type: "text", text: `${elapsed} elapsed` }],
+              details: {
+                name,
+                sessionPath: params.sessionPath,
+                startTime,
+                phase: "running",
+                sessionEntries,
+                sessionBytes,
+              },
             });
           },
         });
