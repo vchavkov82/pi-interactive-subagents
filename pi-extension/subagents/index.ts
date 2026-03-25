@@ -488,7 +488,13 @@ async function launchSubagent(
     const sessionId = ctx.sessionManager.getSessionId();
     const artifactDir = getArtifactDir(ctx.cwd, sessionId);
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const artifactName = `context/${params.name.toLowerCase().replace(/\s+/g, "-")}-${timestamp}.md`;
+    const safeName = params.name
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, "") // strip everything except alphanumeric, spaces, hyphens
+      .replace(/\s+/g, "-") // spaces to hyphens
+      .replace(/-+/g, "-") // collapse multiple hyphens
+      .replace(/^-|-$/g, ""); // trim leading/trailing hyphens
+    const artifactName = `context/${safeName || "subagent"}-${timestamp}.md`;
     const artifactPath = join(artifactDir, artifactName);
     mkdirSync(dirname(artifactPath), { recursive: true });
     writeFileSync(artifactPath, fullTask, "utf8");
@@ -646,12 +652,16 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       label: "Subagent",
       description:
         "Spawn a sub-agent in a dedicated terminal multiplexer pane. " +
-        "Returns immediately — the agent runs in the background and steers results back when done. " +
-        "Supports cmux, tmux, and zellij.",
+        "IMPORTANT: This tool returns IMMEDIATELY — the sub-agent runs asynchronously in the background. " +
+        "You will NOT have results when this tool returns. Results are delivered later via a steer message. " +
+        "Do NOT fabricate, assume, or summarize results after calling this tool. " +
+        "Either wait for the steer message or move on to other work.",
       promptSnippet:
         "Spawn a sub-agent in a dedicated terminal multiplexer pane. " +
-        "Returns immediately — the agent runs in the background and steers results back when done. " +
-        "Supports cmux, tmux, and zellij.",
+        "IMPORTANT: This tool returns IMMEDIATELY — the sub-agent runs asynchronously in the background. " +
+        "You will NOT have results when this tool returns. Results are delivered later via a steer message. " +
+        "Do NOT fabricate, assume, or summarize results after calling this tool. " +
+        "Either wait for the steer message or move on to other work.",
       parameters: SubagentParams,
 
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -741,7 +751,16 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
         // Return immediately
         return {
-          content: [{ type: "text", text: `Sub-agent "${params.name}" started.` }],
+          content: [
+            {
+              type: "text",
+              text:
+                `Sub-agent "${params.name}" launched and is now running in the background. ` +
+                `Do NOT generate or assume any results — you have no idea what the sub-agent will do or produce. ` +
+                `The results will be delivered to you automatically as a steer message when the sub-agent finishes. ` +
+                `Until then, move on to other work or tell the user you're waiting.`,
+            },
+          ],
           details: {
             id: running.id,
             name: params.name,
@@ -932,11 +951,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       label: "Resume Subagent",
       description:
         "Resume a previous sub-agent session in a new multiplexer pane. " +
-        "Returns immediately — the resumed session runs in the background and steers results back when done. " +
+        "IMPORTANT: Returns IMMEDIATELY — the resumed session runs asynchronously in the background. " +
+        "Results are delivered later via a steer message. Do NOT fabricate or assume results. " +
         "Use when a sub-agent was cancelled or needs follow-up work.",
       promptSnippet:
         "Resume a previous sub-agent session in a new multiplexer pane. " +
-        "Returns immediately — the resumed session runs in the background and steers results back when done. " +
+        "IMPORTANT: Returns IMMEDIATELY — the resumed session runs asynchronously in the background. " +
+        "Results are delivered later via a steer message. Do NOT fabricate or assume results. " +
         "Use when a sub-agent was cancelled or needs follow-up work.",
       parameters: Type.Object({
         sessionPath: Type.String({ description: "Path to the session .jsonl file to resume" }),
