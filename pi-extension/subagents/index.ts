@@ -378,7 +378,7 @@ function startWidgetRefresh() {
  */
 async function launchSubagent(
   params: typeof SubagentParams.static,
-  ctx: { sessionManager: { getSessionFile(): string | null; getSessionId(): string }; cwd: string },
+  ctx: { sessionManager: { getSessionFile(): string | null; getSessionId(): string; getSessionDir(): string }; cwd: string },
   options?: { surface?: string },
 ): Promise<RunningSubagent> {
   const startTime = Date.now();
@@ -500,10 +500,24 @@ async function launchSubagent(
     parts.push("--model", shellEscape(model));
   }
 
-  // Pass agent body as system prompt when configured
+  // Pass agent body as system prompt via file to avoid shell escaping issues
+  // with multiline content. Pi's --append-system-prompt and --system-prompt
+  // auto-detect file paths and read their contents.
   if (identityInSystemPrompt && identity) {
     const flag = systemPromptMode === "replace" ? "--system-prompt" : "--append-system-prompt";
-    parts.push(flag, shellEscape(identity));
+    const sessionId = ctx.sessionManager.getSessionId();
+    const artifactDir = getArtifactDir(ctx.sessionManager.getSessionDir(), sessionId);
+    const spTimestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const spSafeName = (params.name ?? "subagent")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+    const syspromptPath = join(artifactDir, `context/${spSafeName || "subagent"}-sysprompt-${spTimestamp}.md`);
+    mkdirSync(dirname(syspromptPath), { recursive: true });
+    writeFileSync(syspromptPath, identity, "utf8");
+    parts.push(flag, shellEscape(syspromptPath));
   }
 
   if (effectiveTools) {
