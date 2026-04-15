@@ -57,6 +57,12 @@ const SubagentParams = Type.Object({
         "Fork the current session — sub-agent gets full conversation context. Use for iterate/bugfix patterns.",
     }),
   ),
+  resumeSessionId: Type.Optional(
+    Type.String({
+      description:
+        "Resume a previous Claude Code session by its ID. Loads the conversation history and continues where it left off. The session ID is returned in details of every claude tool call. Use this to retry cancelled runs or ask follow-up questions.",
+    }),
+  ),
 });
 
 interface AgentDefaults {
