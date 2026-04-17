@@ -53,7 +53,7 @@ npm run typecheck 2>/dev/null
 
 ### 4. Write Review
 
-Use the `write` tool to save the review. The orchestrator provides the target path in your task (typically `.pi/plans/<name>/review.md` or similar). Report the exact path back in your summary.
+Use the `write` tool to save the review. The orchestrator provides the target path in your task (typically `.pi/plans/YYYY-MM-DD-<name>/review.md`). Report the exact path back in your summary.
 
 **Format:**
 
