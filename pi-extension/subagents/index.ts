@@ -881,19 +881,13 @@ async function launchSubagent(
     ? "Your FINAL assistant message should summarize what you accomplished."
     : "Your FINAL assistant message (before calling subagent_done or before the user exits) should summarize what you accomplished.";
   const denySet = resolveDenyTools(agentDefs);
-  const agentType = params.agent ?? params.name;
-  const tabTitleInstruction = denySet.has("set_tab_title")
-    ? ""
-    : `As your FIRST action, set the tab title using set_tab_title. ` +
-      `The title MUST start with [${agentType}] followed by a short description of your current task. ` +
-      `Example: "[${agentType}] Analyzing auth module". Keep it concise.`;
   const identity = agentDefs?.body ?? params.systemPrompt ?? null;
   const systemPromptMode = agentDefs?.systemPromptMode;
   const identityInSystemPrompt = systemPromptMode && identity;
   const roleBlock = identity && !identityInSystemPrompt ? `\n\n${identity}` : "";
   const fullTask = inheritsConversationContext
     ? params.task
-    : `${roleBlock}\n\n${modeHint}\n\n${tabTitleInstruction}\n\n${params.task}\n\n${summaryInstruction}`;
+    : `${roleBlock}\n\n${modeHint}\n\n${params.task}\n\n${summaryInstruction}`;
   // ── Claude Code CLI path ──
   if (agentDefs?.cli === "claude") {
     const sentinelFile = `/tmp/pi-claude-${id}-done`;

@@ -34,7 +34,7 @@ import {
   parseStatusConfig,
   resolveStatusCadenceMs,
 } from "../pi-extension/subagents/status.ts";
-import subagentDoneExtension, {
+import {
   shouldMarkUserTookOver,
   shouldAutoExitOnAgentEnd,
 } from "../pi-extension/subagents/subagent-done.ts";
@@ -964,40 +964,6 @@ describe("commands", () => {
 });
 
 describe("tool registration", () => {
-  it("does not register set_tab_title in the main session extension", () => {
-    const { api, registeredTools } = createMockExtensionApi();
-
-    (subagentsModule as any).default(api);
-
-    assert.equal(registeredTools.some((tool) => tool.name === "set_tab_title"), false);
-  });
-
-  it("registers set_tab_title in subagent sessions", () => {
-    const previousDeniedTools = process.env.PI_DENY_TOOLS;
-
-    try {
-      delete process.env.PI_DENY_TOOLS;
-      const { api, registeredTools } = createMockExtensionApi();
-      subagentDoneExtension(api);
-      assert.equal(registeredTools.some((tool) => tool.name === "set_tab_title"), true);
-    } finally {
-      restoreEnvVar("PI_DENY_TOOLS", previousDeniedTools);
-    }
-  });
-
-  it("skips set_tab_title in subagent sessions when denied", () => {
-    const previousDeniedTools = process.env.PI_DENY_TOOLS;
-
-    try {
-      process.env.PI_DENY_TOOLS = "set_tab_title,subagent";
-      const { api, registeredTools } = createMockExtensionApi();
-      subagentDoneExtension(api);
-      assert.equal(registeredTools.some((tool) => tool.name === "set_tab_title"), false);
-    } finally {
-      restoreEnvVar("PI_DENY_TOOLS", previousDeniedTools);
-    }
-  });
-
   it("expands spawning false to deny subagent interruption", () => {
     const testApi = (subagentsModule as any).__test__;
     const denied = testApi.resolveDenyTools({ spawning: false });
