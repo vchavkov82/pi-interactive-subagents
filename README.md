@@ -172,6 +172,12 @@ subagent({ name: "Designer", agent: "game-designer", cwd: "agents/game-designer"
 
 // Override the status classification window for this run
 subagent({ name: "Scout", agent: "scout", statusCadenceSeconds: 30, task: "..." });
+
+// Run through Cursor Agent with Cursor's default/auto model
+subagent({ name: "Cursor Worker", agent: "worker", model: "cursor-agent", task: "..." });
+
+// Run through Cursor Agent with an explicit Cursor model
+subagent({ name: "Cursor Worker", agent: "worker", model: "cursor-agent:gpt-5", task: "..." });
 ```
 
 ### Parameters
@@ -183,7 +189,7 @@ subagent({ name: "Scout", agent: "scout", statusCadenceSeconds: 30, task: "..." 
 | `agent`                | string  | —              | Load defaults from agent definition                                                               |
 | `fork`                 | boolean | `false`        | Force the full-context fork mode for this spawn, overriding any agent `session-mode` frontmatter  |
 | `interactive`          | boolean | derived        | Mark this spawn as interactive (don't wake the parent on stall/recovery). Defaults to the agent's `interactive` frontmatter, otherwise the inverse of `auto-exit`. |
-| `model`                | string  | —              | Override agent's default model                                                                    |
+| `model`                | string  | —              | Override agent's default model. Use `cursor-agent` for Cursor Agent auto/default model, or `cursor-agent:<model>` / `cursor-agent/<model>` for an explicit Cursor model. |
 | `systemPrompt`         | string  | —              | Append to system prompt                                                                           |
 | `skills`               | string  | —              | Comma-separated skill names                                                                       |
 | `tools`                | string  | —              | Comma-separated tool names                                                                        |
@@ -312,6 +318,22 @@ You are a specialized agent that does X...
 | `interactive` | boolean | derived        | Override whether stall/recovery transitions wake the parent session. Defaults to the inverse of `auto-exit`: autonomous agents (`auto-exit: true`) are non-interactive and get stall pings; agents without `auto-exit` are interactive and stay quiet. Explicit values take precedence. |
 | `cwd`         | string  | Default working directory (absolute or relative to project root)                                                                                                                                                                                                            |
 | `disable-model-invocation` | boolean | Hide this agent from discovery surfaces like `subagents_list`. The agent still remains directly invokable by explicit name via `subagent({ agent: "name", ... })`. |
+
+Cursor Agent can also be selected from agent frontmatter:
+
+```yaml
+---
+name: cursor-worker
+description: Runs tasks through Cursor Agent
+model: cursor-agent
+# Or use an explicit Cursor model:
+# model: cursor-agent:gpt-5
+tools: read, bash, edit, write
+auto-exit: true
+---
+```
+
+When `model` starts with `cursor-agent`, the subagent launches `cursor-agent --print --force --trust --workspace <cwd>`. Omitting the Cursor model keeps Cursor's default/auto model selection; the suffix after `:` or `/` is passed to `cursor-agent --model`.
 
 ---
 
