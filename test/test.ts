@@ -937,6 +937,40 @@ describe("subagent discovery", () => {
     );
   });
 
+  it("parseCursorAgentModel recognizes default and explicit Cursor model syntax", () => {
+    assert.deepEqual(testApi.parseCursorAgentModel(undefined), { enabled: false });
+    assert.deepEqual(testApi.parseCursorAgentModel("anthropic/claude-sonnet-4-6"), { enabled: false });
+    assert.deepEqual(testApi.parseCursorAgentModel("cursor-agent"), { enabled: true });
+    assert.deepEqual(testApi.parseCursorAgentModel("cursor-agent:gpt-5"), { enabled: true, model: "gpt-5" });
+    assert.deepEqual(testApi.parseCursorAgentModel("cursor-agent/sonnet-4"), { enabled: true, model: "sonnet-4" });
+  });
+
+  it("buildCursorAgentCommand uses auto model by default and passes explicit models", () => {
+    assert.equal(
+      testApi.buildCursorAgentCommand({ cwd: "/tmp/work tree", prompt: "do it" }),
+      "cursor-agent --print --force --trust --workspace '/tmp/work tree' 'do it'",
+    );
+    assert.equal(
+      testApi.buildCursorAgentCommand({
+        cwd: "/repo",
+        prompt: "do it",
+        model: "gpt-5",
+        resumeSessionId: "chat-123",
+      }),
+      "cursor-agent --print --force --trust --workspace '/repo' --model 'gpt-5' --resume 'chat-123' 'do it'",
+    );
+  });
+
+  it("classifies Cursor-backed status as running without session-file progress", () => {
+    const state = createStatusState({
+      source: "cursor",
+      startTimeMs: 1_000,
+      cadenceMs: 10_000,
+    });
+
+    assert.equal(classifyStatus(state, 16_000).kind, "running");
+  });
+
   it("lists visible agents from discovery", async () => {
     await withIsolatedAgentEnv(async ({ projectAgentsDir }) => {
       writeAgentFile(

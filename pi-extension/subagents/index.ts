@@ -666,13 +666,55 @@ function buildPiPromptArgs(params: {
   ];
 }
 
+function parseCursorAgentModel(model: string | undefined): { enabled: boolean; model?: string } {
+  if (!model) return { enabled: false };
+  if (model === "cursor-agent") return { enabled: true };
+
+  for (const separator of [":", "/"]) {
+    const prefix = `cursor-agent${separator}`;
+    if (model.startsWith(prefix)) {
+      const cursorModel = model.slice(prefix.length).trim();
+      return cursorModel ? { enabled: true, model: cursorModel } : { enabled: true };
+    }
+  }
+
+  return { enabled: false };
+}
+
+function buildCursorAgentCommand(params: {
+  cwd: string;
+  prompt: string;
+  model?: string;
+  resumeSessionId?: string;
+}): string {
+  const parts = [
+    "cursor-agent",
+    "--print",
+    "--force",
+    "--trust",
+    "--workspace",
+    shellEscape(params.cwd),
+  ];
+
+  if (params.model) {
+    parts.push("--model", shellEscape(params.model));
+  }
+
+  if (params.resumeSessionId) {
+    parts.push("--resume", shellEscape(params.resumeSessionId));
+  }
+
+  parts.push(shellEscape(params.prompt));
+  return parts.join(" ");
+}
+
 function isIgnorableSessionProgressError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return code === "ENOENT" || code === "EBUSY";
 }
 
 function observeRunningSubagent(running: RunningSubagent, observedAt = Date.now()) {
-  if (running.cli === "claude") return;
+  if (running.cli === "claude" || running.cli === "cursor-agent") return;
 
   try {
     const progress = readSessionProgress(running.sessionFile);
@@ -832,6 +874,8 @@ export const __test__ = {
   resolveLaunchBehavior,
   resolveEffectiveInteractive,
   buildPiPromptArgs,
+  parseCursorAgentModel,
+  buildCursorAgentCommand,
   buildWidgetRightLabel,
   isIgnorableSessionProgressError,
   readSessionProgress,
@@ -934,6 +978,56 @@ async function launchSubagent(
   const fullTask = inheritsConversationContext
     ? params.task
     : `${roleBlock}\n\n${modeHint}\n\n${params.task}\n\n${summaryInstruction}`;
+
+  const cursorAgentModel = parseCursorAgentModel(effectiveModel);
+  if (cursorAgentModel.enabled) {
+    const command = `${buildCursorAgentCommand({
+      cwd: targetCwdForSession,
+      prompt: fullTask,
+      model: cursorAgentModel.model,
+      resumeSessionId: params.resumeSessionId,
+    })}; echo '__SUBAGENT_DONE_'$?'__'`;
+
+    const launchScriptName = `${(params.name || "subagent")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "") || "subagent"}-${id}.sh`;
+    const launchScriptFile = join(artifactDir, "subagent-scripts", launchScriptName);
+
+    sendLongCommand(surface, command, {
+      scriptPath: launchScriptFile,
+      scriptPreamble: [
+        `# Cursor Agent subagent launch script for ${params.name}`,
+        `# Generated: ${new Date().toISOString()}`,
+        `# Workspace: ${targetCwdForSession}`,
+        `# Surface: ${surface}`,
+      ].join("\n"),
+    });
+
+    const running: RunningSubagent = {
+      id,
+      name: params.name,
+      task: params.task,
+      agent: params.agent,
+      surface,
+      startTime,
+      sessionFile: subagentSessionFile,
+      launchScriptFile,
+      cli: "cursor-agent",
+      interactive: effectiveInteractive,
+      statusState: createStatusState({
+        source: "cursor",
+        startTimeMs: startTime,
+        cadenceMs: statusCadenceMs,
+      }),
+    };
+
+    runningSubagents.set(id, running);
+    return running;
+  }
+
   // ── Claude Code CLI path ──
   if (agentDefs?.cli === "claude") {
     const sentinelFile = `/tmp/pi-claude-${id}-done`;
@@ -1232,6 +1326,23 @@ async function watchSubagent(
       runningSubagents.delete(running.id);
 
       return { name, task, summary, exitCode: result.exitCode, elapsed, ...(sessionId ? { claudeSessionId: sessionId } : {}) };
+    }
+
+    if (running.cli === "cursor-agent") {
+      let summary = readScreen(surface, 200)
+        .replace(/__SUBAGENT_DONE_\d+__/, "")
+        .trimEnd();
+
+      if (!summary) {
+        summary = result.exitCode !== 0
+          ? `Cursor Agent exited with code ${result.exitCode}`
+          : "Cursor Agent exited without output";
+      }
+
+      closeSurface(surface);
+      runningSubagents.delete(running.id);
+
+      return { name, task, summary, exitCode: result.exitCode, elapsed };
     }
 
     // Pi subagent result extraction (existing, unchanged)

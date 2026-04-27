@@ -15,7 +15,7 @@ const DEFAULT_STATUS_CONFIG_PATH = join(PACKAGE_ROOT, "config.json");
 const STATUS_CONFIG_EXAMPLE_PATH = join(PACKAGE_ROOT, "config.json.example");
 
 export type SubagentStatusKind = "starting" | "active" | "quiet" | "stalled" | "running";
-export type SubagentStatusSource = "pi" | "claude";
+export type SubagentStatusSource = "pi" | "claude" | "cursor";
 export type SubagentStatusTransition = "stalled" | "recovered" | null;
 
 export interface StatusConfig {
@@ -200,7 +200,7 @@ export function createStatusState(params: {
   baselineEntries?: number | null;
   baselineBytes?: number | null;
 }): SubagentStatusState {
-  const initialKind = params.source === "claude" ? "running" : "starting";
+  const initialKind = params.source === "pi" ? "starting" : "running";
   return {
     source: params.source,
     startTimeMs: params.startTimeMs,
@@ -240,7 +240,7 @@ export function observeStatus(
 export function forceStatusQuiet(state: SubagentStatusState, now: number): SubagentStatusState {
   // The interrupt path currently applies only to Pi-backed children.
   // Claude-backed states always classify as `running`, so accidental calls stay a no-op.
-  if (state.source === "claude") return state;
+  if (state.source !== "pi") return state;
 
   const quietIdleMs = state.cadenceMs + 1;
   const maxQuietIdleMs = getStalledAfterMs(state.cadenceMs) - 1;
@@ -263,7 +263,7 @@ export function classifyStatus(state: SubagentStatusState, now: number): StatusS
   const elapsedMs = Math.max(0, now - state.startTimeMs);
   const elapsedText = formatElapsedDuration(elapsedMs);
 
-  if (state.source === "claude") {
+  if (state.source !== "pi") {
     return {
       kind: "running",
       elapsedMs,
