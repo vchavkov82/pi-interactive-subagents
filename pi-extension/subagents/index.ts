@@ -112,6 +112,12 @@ const SubagentParams = Type.Object({
         "Mark the subagent as interactive (long-running, user drives the conversation in its own pane). When true, the main session is not woken by status transitions (stalled/recovered) for this subagent. If omitted, falls back to the agent's `interactive` frontmatter, otherwise the inverse of `auto-exit` (agents that auto-exit are autonomous and get stall pings; agents that don't are interactive and stay quiet).",
     }),
   ),
+  keepPane: Type.Optional(
+    Type.Boolean({
+      description:
+        "When true, the multiplexer pane is kept open after the subagent finishes instead of being closed automatically.",
+    }),
+  ),
   resumeSessionId: Type.Optional(
     Type.String({
       description:
@@ -138,6 +144,7 @@ interface AgentDefaults {
   spawning?: boolean;
   autoExit?: boolean;
   interactive?: boolean;
+  keepPane?: boolean;
   systemPromptMode?: "append" | "replace";
   sessionMode?: SubagentSessionMode;
   cwd?: string;
@@ -243,6 +250,7 @@ function parseAgentDefinition(content: string, fallbackName: string): AgentDefin
     spawning: parseOptionalBoolean(getFrontmatterValue(frontmatter, "spawning")),
     autoExit: parseOptionalBoolean(getFrontmatterValue(frontmatter, "auto-exit")),
     interactive: parseOptionalBoolean(getFrontmatterValue(frontmatter, "interactive")),
+    keepPane: parseOptionalBoolean(getFrontmatterValue(frontmatter, "keep-pane")),
     sessionMode: parseSessionMode(getFrontmatterValue(frontmatter, "session-mode")),
     cwd: getFrontmatterValue(frontmatter, "cwd"),
     cli: getFrontmatterValue(frontmatter, "cli"),
@@ -497,6 +505,7 @@ interface RunningSubagent {
    * subagent's pane (e.g. planner).
    */
   interactive: boolean;
+  keepPane: boolean;
 }
 
 /** All currently running subagents, keyed by id. */
@@ -916,6 +925,7 @@ async function launchSubagent(
   const effectiveSkills = params.skills ?? agentDefs?.skills;
   const effectiveThinking = agentDefs?.thinking;
   const effectiveInteractive = resolveEffectiveInteractive(params, agentDefs);
+  const effectiveKeepPane = params.keepPane ?? agentDefs?.keepPane ?? false;
 
   const sessionFile = ctx.sessionManager.getSessionFile();
   if (!sessionFile) throw new Error("No session file");
@@ -1017,6 +1027,7 @@ async function launchSubagent(
       launchScriptFile,
       cli: "cursor-agent",
       interactive: effectiveInteractive,
+      keepPane: effectiveKeepPane,
       statusState: createStatusState({
         source: "cursor",
         startTimeMs: startTime,
@@ -1091,6 +1102,7 @@ async function launchSubagent(
       cli: "claude",
       sentinelFile,
       interactive: effectiveInteractive,
+      keepPane: effectiveKeepPane,
       statusState: createStatusState({
         source: "claude",
         startTimeMs: startTime,
@@ -1235,6 +1247,7 @@ async function launchSubagent(
     entries: initialProgress?.entries,
     bytes: initialProgress?.bytes,
     interactive: effectiveInteractive,
+    keepPane: effectiveKeepPane,
     statusState: createStatusState({
       source: "pi",
       startTimeMs: startTime,
@@ -1322,7 +1335,7 @@ async function watchSubagent(
         try { unlinkSync(running.sentinelFile + ".transcript"); } catch {}
       }
 
-      closeSurface(surface);
+      if (!running.keepPane) closeSurface(surface);
       runningSubagents.delete(running.id);
 
       return { name, task, summary, exitCode: result.exitCode, elapsed, ...(sessionId ? { claudeSessionId: sessionId } : {}) };
@@ -1339,7 +1352,7 @@ async function watchSubagent(
           : "Cursor Agent exited without output";
       }
 
-      closeSurface(surface);
+      if (!running.keepPane) closeSurface(surface);
       runningSubagents.delete(running.id);
 
       return { name, task, summary, exitCode: result.exitCode, elapsed };
@@ -1361,7 +1374,7 @@ async function watchSubagent(
           : "Sub-agent exited without output";
     }
 
-    closeSurface(surface);
+    if (!running.keepPane) closeSurface(surface);
     runningSubagents.delete(running.id);
 
     return {
@@ -1375,7 +1388,7 @@ async function watchSubagent(
     };
   } catch (err: any) {
     try {
-      closeSurface(surface);
+      if (!running.keepPane) closeSurface(surface);
     } catch {}
     runningSubagents.delete(running.id);
 
@@ -1909,6 +1922,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           launchScriptFile,
           entries: initialProgress?.entries,
           bytes: initialProgress?.bytes,
+          interactive: true,
+          keepPane: false,
           statusState: createStatusState({
             source: "pi",
             startTimeMs: startTime,
