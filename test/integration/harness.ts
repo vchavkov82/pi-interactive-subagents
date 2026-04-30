@@ -32,6 +32,7 @@ import {
   closeSurface,
   sendEscape,
   shellEscape,
+  pollForExit,
   type MuxBackend,
 } from "../../pi-extension/subagents/cmux.ts";
 
@@ -46,6 +47,7 @@ export {
   closeSurface,
   sendEscape,
   shellEscape,
+  pollForExit,
 };
 export type { MuxBackend };
 

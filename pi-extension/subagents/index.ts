@@ -1287,6 +1287,20 @@ function copyClaudeSession(sentinelFile: string): string | null {
   }
 }
 
+function readScreenIfPresent(surface: string, lines: number): string {
+  try {
+    return readScreen(surface, lines);
+  } catch {
+    return "";
+  }
+}
+
+function closeSurfaceIfPresent(surface: string): void {
+  try {
+    closeSurface(surface);
+  } catch {}
+}
+
 async function watchSubagent(
   running: RunningSubagent,
   signal: AbortSignal,
@@ -1316,7 +1330,7 @@ async function watchSubagent(
       }
 
       if (!summary) {
-        summary = readScreen(surface, 200)
+        summary = readScreenIfPresent(surface, 200)
           .replace(/__SUBAGENT_DONE_\d+__/, "")
           .trimEnd();
       }
@@ -1335,14 +1349,14 @@ async function watchSubagent(
         try { unlinkSync(running.sentinelFile + ".transcript"); } catch {}
       }
 
-      if (!running.keepPane) closeSurface(surface);
+      if (!running.keepPane) closeSurfaceIfPresent(surface);
       runningSubagents.delete(running.id);
 
       return { name, task, summary, exitCode: result.exitCode, elapsed, ...(sessionId ? { claudeSessionId: sessionId } : {}) };
     }
 
     if (running.cli === "cursor-agent") {
-      let summary = readScreen(surface, 200)
+      let summary = readScreenIfPresent(surface, 200)
         .replace(/__SUBAGENT_DONE_\d+__/, "")
         .trimEnd();
 
@@ -1352,7 +1366,7 @@ async function watchSubagent(
           : "Cursor Agent exited without output";
       }
 
-      if (!running.keepPane) closeSurface(surface);
+      if (!running.keepPane) closeSurfaceIfPresent(surface);
       runningSubagents.delete(running.id);
 
       return { name, task, summary, exitCode: result.exitCode, elapsed };
@@ -1374,7 +1388,7 @@ async function watchSubagent(
           : "Sub-agent exited without output";
     }
 
-    if (!running.keepPane) closeSurface(surface);
+    if (!running.keepPane) closeSurfaceIfPresent(surface);
     runningSubagents.delete(running.id);
 
     return {
@@ -1387,9 +1401,7 @@ async function watchSubagent(
       ping: result.ping,
     };
   } catch (err: any) {
-    try {
-      if (!running.keepPane) closeSurface(surface);
-    } catch {}
+    if (!running.keepPane) closeSurfaceIfPresent(surface);
     runningSubagents.delete(running.id);
 
     if (signal.aborted) {
@@ -1410,6 +1422,7 @@ async function watchSubagent(
       exitCode: 1,
       elapsed: Math.floor((Date.now() - startTime) / 1000),
       error: err?.message ?? String(err),
+      sessionFile,
     };
   }
 }

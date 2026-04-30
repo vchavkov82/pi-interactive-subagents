@@ -26,6 +26,7 @@ import {
   readScreenAsync,
   closeSurface,
   sendEscape,
+  pollForExit,
   sleep,
   uniqueId,
   trackTempFile,
@@ -130,6 +131,24 @@ for (const backend of backends) {
         screen.includes(`ASYNC_${marker}`),
         `Async read should find marker. Got:\n${screen}`,
       );
+    });
+
+    it("detects a destroyed surface instead of polling forever", async () => {
+      const surface = createTrackedSurface(env, "destroyed-poll-test");
+      await sleep(1000);
+
+      closeSurface(surface);
+      untrackSurface(env, surface);
+
+      const result = await Promise.race([
+        pollForExit(surface, new AbortController().signal, { interval: 50 }),
+        sleep(2000).then(() => {
+          throw new Error("pollForExit did not resolve after surface destruction");
+        }),
+      ]);
+
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.reason, "sentinel");
     });
 
     it("manages multiple surfaces concurrently", async () => {
