@@ -695,7 +695,13 @@ export interface PollResult {
  * Poll until the subagent exits. Checks for a `.exit` sidecar file first
  * (written by subagent_done / caller_ping), falling back to the terminal
  * sentinel for crash detection.
+ *
+ * Detects destroyed panes: after MAX_SURFACE_READ_FAILURES consecutive
+ * failures to read the terminal screen (pane gone), returns a sentinel
+ * result with exit code 1 instead of polling forever.
  */
+const MAX_SURFACE_READ_FAILURES = 5;
+
 export async function pollForExit(
   surface: string,
   signal: AbortSignal,
@@ -707,6 +713,7 @@ export async function pollForExit(
   },
 ): Promise<PollResult> {
   const start = Date.now();
+  let consecutiveSurfaceReadFailures = 0;
 
   while (true) {
     if (signal.aborted) {
@@ -740,11 +747,14 @@ export async function pollForExit(
     // Slow path: read terminal screen for sentinel (crash detection)
     try {
       const screen = await readScreenAsync(surface, 5);
+      consecutiveSurfaceReadFailures = 0; // Reset on success
       const match = screen.match(/__SUBAGENT_DONE_(\d+)__/);
       if (match) {
         return { reason: "sentinel", exitCode: parseInt(match[1], 10) };
       }
     } catch {
+      consecutiveSurfaceReadFailures++;
+
       // Surface may have been destroyed — check if .exit file appeared in the meantime
       if (options.sessionFile) {
         try {
@@ -758,6 +768,12 @@ export async function pollForExit(
             return { reason: "done", exitCode: 0 };
           }
         } catch {}
+      }
+
+      // If the surface has been unreadable for too many consecutive polls,
+      // the pane is dead — stop polling to avoid infinite zombie loops.
+      if (consecutiveSurfaceReadFailures >= MAX_SURFACE_READ_FAILURES) {
+        return { reason: "sentinel", exitCode: 1 };
       }
     }
 
