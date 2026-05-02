@@ -961,6 +961,13 @@ describe("subagent discovery", () => {
     );
   });
 
+  it("buildCursorAgentLaunchCommand writes an exit sidecar for reliable watcher completion", () => {
+    assert.equal(
+      testApi.buildCursorAgentLaunchCommand({ cwd: "/repo", prompt: "do it", exitFile: "/tmp/subagent.exit" }),
+      "cursor-agent --print --output-format stream-json --stream-partial-output --force --trust --workspace '/repo' 'do it'; status=$?; echo \"__SUBAGENT_DONE_${status}__\"; printf '{\"type\":\"done\",\"exitCode\":%s}\\n' \"$status\" > '/tmp/subagent.exit'; exit \"$status\"",
+    );
+  });
+
   it("classifies Cursor-backed status using observed screen progress", () => {
     let state = createStatusState({
       source: "cursor",

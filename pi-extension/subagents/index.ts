@@ -802,6 +802,22 @@ function buildCursorAgentCommand(params: {
   return parts.join(" ");
 }
 
+function buildCursorAgentLaunchCommand(params: {
+  cwd: string;
+  prompt: string;
+  exitFile: string;
+  model?: string;
+  resumeSessionId?: string;
+}): string {
+  return [
+    buildCursorAgentCommand(params),
+    "status=$?",
+    `echo "__SUBAGENT_DONE_\${status}__"`,
+    `printf '{"type":"done","exitCode":%s}\\n' "$status" > ${shellEscape(params.exitFile)}`,
+    `exit "$status"`,
+  ].join("; ");
+}
+
 function isIgnorableSessionProgressError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return code === "ENOENT" || code === "EBUSY";
@@ -972,6 +988,7 @@ export const __test__ = {
   buildPiPromptArgs,
   parseCursorAgentModel,
   buildCursorAgentCommand,
+  buildCursorAgentLaunchCommand,
   buildWidgetRightLabel,
   isIgnorableSessionProgressError,
   readSessionProgress,
@@ -1078,12 +1095,13 @@ async function launchSubagent(
 
   const cursorAgentModel = parseCursorAgentModel(effectiveModel);
   if (cursorAgentModel.enabled) {
-    const command = `${buildCursorAgentCommand({
+    const command = buildCursorAgentLaunchCommand({
       cwd: targetCwdForSession,
       prompt: fullTask,
+      exitFile: `${subagentSessionFile}.exit`,
       model: cursorAgentModel.model,
       resumeSessionId: params.resumeSessionId,
-    })}; echo '__SUBAGENT_DONE_'$?'__'`;
+    });
 
     const launchScriptName = `${(params.name || "subagent")
       .toLowerCase()

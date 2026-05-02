@@ -730,7 +730,7 @@ export async function pollForExit(
           if (data.type === "ping") {
             return { reason: "ping", exitCode: 0, ping: { name: data.name, message: data.message } };
           }
-          return { reason: "done", exitCode: 0 };
+          return { reason: "done", exitCode: typeof data.exitCode === "number" ? data.exitCode : 0 };
         }
       } catch {}
     }
@@ -765,7 +765,7 @@ export async function pollForExit(
             if (data.type === "ping") {
               return { reason: "ping", exitCode: 0, ping: { name: data.name, message: data.message } };
             }
-            return { reason: "done", exitCode: 0 };
+            return { reason: "done", exitCode: typeof data.exitCode === "number" ? data.exitCode : 0 };
           }
         } catch {}
       }
