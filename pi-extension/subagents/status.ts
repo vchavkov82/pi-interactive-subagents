@@ -263,7 +263,7 @@ export function classifyStatus(state: SubagentStatusState, now: number): StatusS
   const elapsedMs = Math.max(0, now - state.startTimeMs);
   const elapsedText = formatElapsedDuration(elapsedMs);
 
-  if (state.source !== "pi") {
+  if (state.source === "claude") {
     return {
       kind: "running",
       elapsedMs,

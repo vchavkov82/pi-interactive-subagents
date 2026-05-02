@@ -948,7 +948,7 @@ describe("subagent discovery", () => {
   it("buildCursorAgentCommand uses auto model by default and passes explicit models", () => {
     assert.equal(
       testApi.buildCursorAgentCommand({ cwd: "/tmp/work tree", prompt: "do it" }),
-      "cursor-agent --print --force --trust --workspace '/tmp/work tree' 'do it'",
+      "cursor-agent --print --output-format stream-json --stream-partial-output --force --trust --workspace '/tmp/work tree' 'do it'",
     );
     assert.equal(
       testApi.buildCursorAgentCommand({
@@ -957,18 +957,22 @@ describe("subagent discovery", () => {
         model: "gpt-5",
         resumeSessionId: "chat-123",
       }),
-      "cursor-agent --print --force --trust --workspace '/repo' --model 'gpt-5' --resume 'chat-123' 'do it'",
+      "cursor-agent --print --output-format stream-json --stream-partial-output --force --trust --workspace '/repo' --model 'gpt-5' --resume 'chat-123' 'do it'",
     );
   });
 
-  it("classifies Cursor-backed status as running without session-file progress", () => {
-    const state = createStatusState({
+  it("classifies Cursor-backed status using observed screen progress", () => {
+    let state = createStatusState({
       source: "cursor",
       startTimeMs: 1_000,
       cadenceMs: 10_000,
     });
 
-    assert.equal(classifyStatus(state, 16_000).kind, "running");
+    assert.equal(classifyStatus(state, 16_000).kind, "starting");
+
+    state = observeStatus(state, { entries: 1, bytes: 80 }, 2_000);
+    assert.equal(classifyStatus(state, 2_100).kind, "active");
+    assert.equal(classifyStatus(state, 13_000).kind, "quiet");
   });
 
   it("lists visible agents from discovery", async () => {

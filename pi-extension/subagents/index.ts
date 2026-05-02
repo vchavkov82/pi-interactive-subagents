@@ -440,10 +440,89 @@ function readSessionProgress(sessionFile: string): { entries: number; bytes: num
   };
 }
 
+function hashText(text: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return String(hash >>> 0);
+}
+
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+}
+
+function extractCursorJsonText(line: string): string | null {
+  try {
+    const parsed = JSON.parse(line) as any;
+    if (parsed?.type === "result" && typeof parsed.result === "string") return parsed.result;
+    const content = parsed?.message?.content;
+    if (Array.isArray(content)) {
+      const text = content
+        .map((part) => part?.type === "text" && typeof part.text === "string" ? part.text : "")
+        .join("")
+        .trim();
+      if (text) return text;
+    }
+  } catch {
+    // Not a Cursor stream-json line.
+  }
+  return null;
+}
+
+function getLastMeaningfulScreenLine(screen: string): string {
+  const lines = screen
+    .split("\n")
+    .map((line) => stripAnsi(line).trim())
+    .filter(Boolean)
+    .filter((line) => !line.includes("__SUBAGENT_DONE_"));
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const parsed = extractCursorJsonText(lines[i]);
+    if (parsed) return parsed.replace(/\s+/g, " ").slice(0, 80);
+  }
+
+  return lines.at(-1)?.replace(/\s+/g, " ").slice(0, 80) ?? "";
+}
+
+function extractCursorResult(screen: string): string {
+  const lines = screen
+    .split("\n")
+    .map((line) => stripAnsi(line).trim())
+    .filter(Boolean)
+    .filter((line) => !line.includes("__SUBAGENT_DONE_"));
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const parsed = JSON.parse(lines[i]) as any;
+      if (parsed?.type === "result" && typeof parsed.result === "string") return parsed.result.trim();
+    } catch {
+      // Ignore non-JSON terminal lines.
+    }
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+function readScreenProgress(running: RunningSubagent): { entries: number; bytes: number } | null {
+  const screen = readScreen(running.surface, 40);
+  const fingerprint = hashText(screen);
+  if (fingerprint !== running.screenFingerprint) {
+    running.screenFingerprint = fingerprint;
+    running.screenChanges = (running.screenChanges ?? 0) + 1;
+    running.lastScreenLine = getLastMeaningfulScreenLine(screen);
+  }
+  return { entries: running.screenChanges ?? 0, bytes: screen.length };
+}
+
 function buildWidgetRightLabel(agent: RunningSubagent, snapshot: StatusSnapshot): string {
   if (snapshot.kind === "starting") return " starting… ";
   if (snapshot.kind === "running") return ` running ${snapshot.elapsedText} `;
   if (snapshot.kind === "active") {
+    if (agent.cli === "cursor-agent" && agent.lastScreenLine) {
+      return ` active · ${agent.lastScreenLine} `;
+    }
     if (agent.entries != null && agent.bytes != null) {
       return ` active · ${agent.entries} msgs `;
     }
@@ -494,6 +573,9 @@ interface RunningSubagent {
   launchScriptFile?: string;
   entries?: number;
   bytes?: number;
+  screenFingerprint?: string;
+  screenChanges?: number;
+  lastScreenLine?: string;
   abortController?: AbortController;
   cli?: string;
   sentinelFile?: string;
@@ -699,6 +781,9 @@ function buildCursorAgentCommand(params: {
   const parts = [
     "cursor-agent",
     "--print",
+    "--output-format",
+    "stream-json",
+    "--stream-partial-output",
     "--force",
     "--trust",
     "--workspace",
@@ -723,10 +808,12 @@ function isIgnorableSessionProgressError(error: unknown): boolean {
 }
 
 function observeRunningSubagent(running: RunningSubagent, observedAt = Date.now()) {
-  if (running.cli === "claude" || running.cli === "cursor-agent") return;
+  if (running.cli === "claude") return;
 
   try {
-    const progress = readSessionProgress(running.sessionFile);
+    const progress = running.cli === "cursor-agent"
+      ? readScreenProgress(running)
+      : readSessionProgress(running.sessionFile);
     if (!progress) return;
 
     running.entries = progress.entries;
@@ -1356,9 +1443,7 @@ async function watchSubagent(
     }
 
     if (running.cli === "cursor-agent") {
-      let summary = readScreenIfPresent(surface, 200)
-        .replace(/__SUBAGENT_DONE_\d+__/, "")
-        .trimEnd();
+      let summary = extractCursorResult(readScreenIfPresent(surface, 400));
 
       if (!summary) {
         summary = result.exitCode !== 0
