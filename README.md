@@ -79,11 +79,11 @@ export PI_SUBAGENT_SHELL_READY_DELAY_MS=2500
 
 | Agent             | Model                  | Role                                                                                     |
 | ----------------- | ---------------------- | ---------------------------------------------------------------------------------------- |
-| **planner**       | Opus (medium thinking) | Brainstorming — clarifies requirements, explores approaches, writes plans, creates todos |
-| **scout**         | Haiku                  | Fast codebase reconnaissance — maps files, patterns, conventions                         |
-| **worker**        | Sonnet                 | Implements tasks from todos — writes code, runs tests, makes polished commits            |
-| **reviewer**      | Opus (medium thinking) | Reviews code for bugs, security issues, correctness                                      |
-| **visual-tester** | Sonnet                 | Visual QA via Chrome CDP — screenshots, responsive testing, interaction testing          |
+| **planner**       | Opus 4.6 (medium thinking) | Brainstorming — clarifies requirements, explores approaches, writes plans, creates todos |
+| **scout**         | Haiku                       | Fast codebase reconnaissance — maps files, patterns, conventions                         |
+| **worker**        | Sonnet 4.6                  | Implements tasks from todos — writes code, runs tests, makes polished commits            |
+| **reviewer**      | Codex 5.3                   | Reviews code for bugs, security issues, correctness                                      |
+| **visual-tester** | Sonnet 4.6                  | Visual QA via Chrome CDP — screenshots, responsive testing, interaction testing          |
 
 Agent discovery follows priority: **project-local** (`.pi/agents/`) > **global** (`~/.pi/agent/agents/`) > **package-bundled**. Override any bundled agent by placing your own version in the higher-priority location.
 
