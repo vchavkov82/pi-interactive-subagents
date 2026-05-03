@@ -18,7 +18,7 @@ import {
   seedSubagentSessionFile,
 } from "../pi-extension/subagents/session.ts";
 
-import { shellEscape, isCmuxAvailable, isWezTermAvailable } from "../pi-extension/subagents/cmux.ts";
+import { shellEscape, isCmuxAvailable, isWezTermAvailable, createSurface, __test__ as cmuxTestApi } from "../pi-extension/subagents/cmux.ts";
 import {
   advanceStatusState,
   capStatusLines,
@@ -1600,6 +1600,44 @@ describe("cmux.ts", () => {
     it("returns boolean based on WEZTERM_UNIX_SOCKET", () => {
       const result = isWezTermAvailable();
       assert.equal(typeof result, "boolean");
+    });
+  });
+
+  describe("cmux surface targeting", () => {
+    it("targets first cmux split at the parent CMUX_SURFACE_ID and reuses that pane for later tabs", () => {
+      const oldEnv = { ...process.env };
+      const commands: string[] = [];
+
+      try {
+        process.env.PI_SUBAGENT_MUX = "cmux";
+        process.env.CMUX_SOCKET_PATH = "/tmp/cmux.sock";
+        process.env.CMUX_SURFACE_ID = "surface:parent";
+        cmuxTestApi.resetCommandAvailability();
+        cmuxTestApi.setCmuxSubagentPane(null);
+        cmuxTestApi.setExecSync(((command: string) => {
+          commands.push(command);
+          if (command === "command -v cmux") return "cmux";
+          if (command === "cmux new-split right --surface 'surface:parent'") return "surface:101\n";
+          if (command === "cmux identify --surface 'surface:101'") return JSON.stringify({ caller: { pane_ref: "pane:subagents" } });
+          if (command === "cmux tree") return "pane:parent\npane:subagents\n";
+          if (command === "cmux new-surface --pane 'pane:subagents'") return "surface:102\n";
+          if (command.startsWith("cmux rename-tab")) return "";
+          throw new Error(`unexpected command: ${command}`);
+        }) as any);
+
+        assert.equal(createSurface("Worker A"), "surface:101");
+        assert.equal(createSurface("Worker B"), "surface:102");
+        assert.equal(cmuxTestApi.getCmuxSubagentPane(), "pane:subagents");
+        assert.deepEqual(commands.filter((c) => c.startsWith("cmux new")), [
+          "cmux new-split right --surface 'surface:parent'",
+          "cmux new-surface --pane 'pane:subagents'",
+        ]);
+      } finally {
+        process.env = oldEnv;
+        cmuxTestApi.setCmuxSubagentPane(null);
+        cmuxTestApi.resetCommandAvailability();
+        cmuxTestApi.resetExecSync();
+      }
     });
   });
 });

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 const execFileAsync = promisify(execFile);
+let execSyncImpl = execSync;
 
 export type MuxBackend = "cmux" | "tmux" | "zellij" | "wezterm";
 
@@ -17,7 +18,7 @@ function hasCommand(command: string): boolean {
 
   let available = false;
   try {
-    execSync(`command -v ${command}`, { stdio: "ignore" });
+    execSyncImpl(`command -v ${command}`, { stdio: "ignore" });
     available = true;
   } catch {
     available = false;
@@ -188,6 +189,38 @@ async function zellijActionAsync(args: string[], surface?: string): Promise<stri
 /** Tracked subagent pane for cmux — reused across subagent launches. */
 let cmuxSubagentPane: string | null = null;
 
+function parentSurfaceForSplit(backend: MuxBackend | null): string | undefined {
+  if (backend === "cmux") return process.env.CMUX_SURFACE_ID;
+  if (backend === "tmux") return process.env.TMUX_PANE;
+  return undefined;
+}
+
+function cmuxPaneExists(pane: string): boolean {
+  try {
+    const tree = execSyncImpl(`cmux tree`, { encoding: "utf8" });
+    return tree.includes(pane);
+  } catch {
+    return false;
+  }
+}
+
+export const __test__ = {
+  parentSurfaceForSplit,
+  getCmuxSubagentPane: () => cmuxSubagentPane,
+  setCmuxSubagentPane: (pane: string | null) => {
+    cmuxSubagentPane = pane;
+  },
+  resetCommandAvailability: () => {
+    commandAvailability.clear();
+  },
+  setExecSync: (impl: typeof execSync) => {
+    execSyncImpl = impl;
+  },
+  resetExecSync: () => {
+    execSyncImpl = execSync;
+  },
+};
+
 /**
  * Create a new terminal surface for a subagent.
  *
@@ -202,25 +235,24 @@ export function createSurface(name: string): string {
 
   if (backend === "cmux" && cmuxSubagentPane) {
     // Verify the pane still exists before adding a tab to it
-    try {
-      const tree = execSync(`cmux tree`, { encoding: "utf8" });
-      if (tree.includes(cmuxSubagentPane)) {
-        return createSurfaceInPane(name, cmuxSubagentPane);
-      }
-    } catch {}
+    if (cmuxPaneExists(cmuxSubagentPane)) {
+      return createSurfaceInPane(name, cmuxSubagentPane);
+    }
     // Pane is gone — fall through to create a new split
     cmuxSubagentPane = null;
   }
 
-  // On tmux, target the parent pi's pane so splits follow the agent, not the user's focus.
+  // Target the parent pi's surface/pane so splits follow the agent, not the user's focus.
+  // cmux new-split is focus-dependent without --surface; AWAO dispatches multiple
+  // subagents in quick succession, so focus may be on a worker pane when the next
+  // split is created. Anchor the first subagent pane to the parent Pi surface.
   // See https://github.com/HazAT/pi-interactive-subagents/issues/12
-  const fromSurface = backend === "tmux" ? process.env.TMUX_PANE : undefined;
-  const surface = createSurfaceSplit(name, "right", fromSurface);
+  const surface = createSurfaceSplit(name, "right", parentSurfaceForSplit(backend));
 
   // For cmux, remember the pane so future subagents become tabs in it
   if (backend === "cmux") {
     try {
-      const info = execSync(`cmux identify --surface ${shellEscape(surface)}`, {
+      const info = execSyncImpl(`cmux identify --surface ${shellEscape(surface)}`, {
         encoding: "utf8",
       });
       const parsed = JSON.parse(info);
@@ -238,7 +270,7 @@ export function createSurface(name: string): string {
  * Create a new surface (tab) in an existing cmux pane.
  */
 function createSurfaceInPane(name: string, pane: string): string {
-  const out = execSync(`cmux new-surface --pane ${shellEscape(pane)}`, {
+  const out = execSyncImpl(`cmux new-surface --pane ${shellEscape(pane)}`, {
     encoding: "utf8",
   }).trim();
   const match = out.match(/surface:\d+/);
@@ -246,7 +278,7 @@ function createSurfaceInPane(name: string, pane: string): string {
     throw new Error(`Unexpected cmux new-surface output: ${out}`);
   }
   const surface = match[0];
-  execSync(`cmux rename-tab --surface ${shellEscape(surface)} ${shellEscape(name)}`, {
+  execSyncImpl(`cmux rename-tab --surface ${shellEscape(surface)} ${shellEscape(name)}`, {
     encoding: "utf8",
   });
   return surface;
@@ -265,7 +297,7 @@ export function createSurfaceSplit(
 
   if (backend === "cmux") {
     const surfaceArg = fromSurface ? ` --surface ${shellEscape(fromSurface)}` : "";
-    const out = execSync(`cmux new-split ${direction}${surfaceArg}`, {
+    const out = execSyncImpl(`cmux new-split ${direction}${surfaceArg}`, {
       encoding: "utf8",
     }).trim();
     const match = out.match(/surface:\d+/);
@@ -273,7 +305,7 @@ export function createSurfaceSplit(
       throw new Error(`Unexpected cmux new-split output: ${out}`);
     }
     const surface = match[0];
-    execSync(`cmux rename-tab --surface ${shellEscape(surface)} ${shellEscape(name)}`, {
+    execSyncImpl(`cmux rename-tab --surface ${shellEscape(surface)} ${shellEscape(name)}`, {
       encoding: "utf8",
     });
     return surface;
@@ -380,7 +412,7 @@ export function renameCurrentTab(title: string): void {
   if (backend === "cmux") {
     const surfaceId = process.env.CMUX_SURFACE_ID;
     if (!surfaceId) throw new Error("CMUX_SURFACE_ID not set");
-    execSync(`cmux rename-tab --surface ${shellEscape(surfaceId)} ${shellEscape(title)}`, {
+    execSyncImpl(`cmux rename-tab --surface ${shellEscape(surfaceId)} ${shellEscape(title)}`, {
       encoding: "utf8",
     });
     return;
@@ -426,7 +458,7 @@ export function renameWorkspace(title: string): void {
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {
-    execSync(`cmux workspace-action --action rename --title ${shellEscape(title)}`, {
+    execSyncImpl(`cmux workspace-action --action rename --title ${shellEscape(title)}`, {
       encoding: "utf8",
     });
     return;
@@ -479,7 +511,7 @@ export function sendCommand(surface: string, command: string): void {
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {
-    execSync(`cmux send --surface ${shellEscape(surface)} ${shellEscape(command + "\n")}`, {
+    execSyncImpl(`cmux send --surface ${shellEscape(surface)} ${shellEscape(command + "\n")}`, {
       encoding: "utf8",
     });
     return;
@@ -575,7 +607,7 @@ export function readScreen(surface: string, lines = 50): string {
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {
-    return execSync(`cmux read-screen --surface ${shellEscape(surface)} --lines ${lines}`, {
+    return execSyncImpl(`cmux read-screen --surface ${shellEscape(surface)} --lines ${lines}`, {
       encoding: "utf8",
     });
   }
@@ -661,7 +693,7 @@ export function closeSurface(surface: string): void {
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {
-    execSync(`cmux close-surface --surface ${shellEscape(surface)}`, {
+    execSyncImpl(`cmux close-surface --surface ${shellEscape(surface)}`, {
       encoding: "utf8",
     });
     return;
