@@ -18,7 +18,7 @@ import {
   seedSubagentSessionFile,
 } from "../pi-extension/subagents/session.ts";
 
-import { shellEscape, isCmuxAvailable, isWezTermAvailable, createSurface, __test__ as cmuxTestApi } from "../pi-extension/subagents/cmux.ts";
+import { shellEscape, isCmuxAvailable, isWezTermAvailable, createSurface, renameCurrentTab, renameWorkspace, __test__ as cmuxTestApi } from "../pi-extension/subagents/cmux.ts";
 import {
   advanceStatusState,
   capStatusLines,
@@ -1589,7 +1589,7 @@ describe("cmux.ts", () => {
   });
 
   describe("isCmuxAvailable", () => {
-    it("returns boolean based on CMUX_SOCKET_PATH", () => {
+    it("returns boolean based on CMUX_SOCKET_PATH or CMUX_SOCKET", () => {
       // Can't easily mock env in node:test, just verify it returns a boolean
       const result = isCmuxAvailable();
       assert.equal(typeof result, "boolean");
@@ -1604,7 +1604,7 @@ describe("cmux.ts", () => {
   });
 
   describe("cmux surface targeting", () => {
-    it("targets first cmux split at the parent CMUX_SURFACE_ID and reuses that pane for later tabs", () => {
+    it("targets first legacy cmux split at the parent CMUX_SURFACE_ID and reuses that pane for later tabs", () => {
       const oldEnv = { ...process.env };
       const commands: string[] = [];
 
@@ -1617,6 +1617,7 @@ describe("cmux.ts", () => {
         cmuxTestApi.setExecSync(((command: string) => {
           commands.push(command);
           if (command === "command -v cmux") return "cmux";
+          if (command === "cmux --help") return "Commands:\n  new-split\n  new-surface\n";
           if (command === "cmux new-split right --surface 'surface:parent'") return "surface:101\n";
           if (command === "cmux identify --surface 'surface:101'") return JSON.stringify({ caller: { pane_ref: "pane:subagents" } });
           if (command === "cmux tree") return "pane:parent\npane:subagents\n";
@@ -1635,6 +1636,69 @@ describe("cmux.ts", () => {
       } finally {
         process.env = oldEnv;
         cmuxTestApi.setCmuxSubagentPane(null);
+        cmuxTestApi.resetCommandAvailability();
+        cmuxTestApi.resetExecSync();
+      }
+    });
+
+    it("uses the modern cmux split API and CMUX_SOCKET environment", () => {
+      const oldEnv = { ...process.env };
+      const commands: string[] = [];
+
+      try {
+        process.env.PI_SUBAGENT_MUX = "cmux";
+        delete process.env.CMUX_SOCKET_PATH;
+        process.env.CMUX_SOCKET = "/tmp/cmux.sock";
+        process.env.CMUX_SURFACE_ID = "parent-uuid";
+        cmuxTestApi.resetCommandAvailability();
+        cmuxTestApi.setCmuxSubagentPane("pane:legacy");
+        cmuxTestApi.setExecSync(((command: string) => {
+          commands.push(command);
+          if (command === "command -v cmux") return "cmux";
+          if (command === "cmux --help") return "Commands:\n  split\n  focus-surface\n  send-text\n";
+          if (command === "cmux split --direction horizontal --id 'parent-uuid' --json") {
+            return JSON.stringify({ surface: { id: "123e4567-e89b-12d3-a456-426614174000" } });
+          }
+          throw new Error(`unexpected command: ${command}`);
+        }) as any);
+
+        assert.equal(createSurface("Worker A"), "123e4567-e89b-12d3-a456-426614174000");
+        assert.equal(cmuxTestApi.getCmuxSubagentPane(), "pane:legacy");
+        assert.deepEqual(commands.filter((c) => c.startsWith("cmux split")), [
+          "cmux split --direction horizontal --id 'parent-uuid' --json",
+        ]);
+        assert.ok(!commands.some((c) => c.includes("new-split") || c.includes("new-surface")));
+      } finally {
+        process.env = oldEnv;
+        cmuxTestApi.setCmuxSubagentPane(null);
+        cmuxTestApi.resetCommandAvailability();
+        cmuxTestApi.resetExecSync();
+      }
+    });
+
+    it("does not call removed modern cmux tab commands when renaming", () => {
+      const oldEnv = { ...process.env };
+      const commands: string[] = [];
+
+      try {
+        process.env.PI_SUBAGENT_MUX = "cmux";
+        process.env.CMUX_SOCKET = "/tmp/cmux.sock";
+        process.env.CMUX_WORKSPACE_ID = "workspace-uuid";
+        cmuxTestApi.resetCommandAvailability();
+        cmuxTestApi.setExecSync(((command: string) => {
+          commands.push(command);
+          if (command === "command -v cmux") return "cmux";
+          if (command === "cmux --help") return "Commands:\n  split\n  rename-workspace\n";
+          if (command === "cmux rename-workspace 'workspace-uuid' 'New title'") return "";
+          throw new Error(`unexpected command: ${command}`);
+        }) as any);
+
+        renameCurrentTab("Tab title");
+        renameWorkspace("New title");
+        assert.ok(!commands.some((c) => c.includes("rename-tab") || c.includes("workspace-action")));
+        assert.ok(commands.includes("cmux rename-workspace 'workspace-uuid' 'New title'"));
+      } finally {
+        process.env = oldEnv;
         cmuxTestApi.resetCommandAvailability();
         cmuxTestApi.resetExecSync();
       }

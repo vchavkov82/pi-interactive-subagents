@@ -35,7 +35,7 @@ function muxPreference(): MuxBackend | null {
 }
 
 function isCmuxRuntimeAvailable(): boolean {
-  return !!process.env.CMUX_SOCKET_PATH && hasCommand("cmux");
+  return !!(process.env.CMUX_SOCKET_PATH || process.env.CMUX_SOCKET) && hasCommand("cmux");
 }
 
 function isTmuxRuntimeAvailable(): boolean {
@@ -186,11 +186,22 @@ async function zellijActionAsync(args: string[], surface?: string): Promise<stri
   return stdout;
 }
 
-/** Tracked subagent pane for cmux — reused across subagent launches. */
+/** Tracked subagent pane for legacy cmux — reused across subagent launches. */
 let cmuxSubagentPane: string | null = null;
 
+type CmuxCliMode = "legacy" | "modern";
+
+function cmuxCliMode(): CmuxCliMode {
+  try {
+    const help = execSyncImpl("cmux --help", { encoding: "utf8" });
+    return help.includes("new-split") || help.includes("new-surface") ? "legacy" : "modern";
+  } catch {
+    return "legacy";
+  }
+}
+
 function parentSurfaceForSplit(backend: MuxBackend | null): string | undefined {
-  if (backend === "cmux") return process.env.CMUX_SURFACE_ID;
+  if (backend === "cmux") return process.env.CMUX_SURFACE_ID ?? process.env.CMUX_SURFACE;
   if (backend === "tmux") return process.env.TMUX_PANE;
   return undefined;
 }
@@ -204,8 +215,50 @@ function cmuxPaneExists(pane: string): boolean {
   }
 }
 
+function findSurfaceRef(value: unknown): string | null {
+  if (typeof value === "string") {
+    if (/surface:\d+/.test(value)) return value.match(/surface:\d+/)![0];
+    if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value)) return value;
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const ref = findSurfaceRef(item);
+      if (ref) return ref;
+    }
+    return null;
+  }
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    for (const key of ["surface", "surfaceId", "surface_id", "id"]) {
+      const ref = findSurfaceRef(obj[key]);
+      if (ref) return ref;
+    }
+    for (const item of Object.values(obj)) {
+      const ref = findSurfaceRef(item);
+      if (ref) return ref;
+    }
+  }
+  return null;
+}
+
+function parseCmuxSurface(output: string, command: string): string {
+  const trimmed = output.trim();
+  try {
+    const ref = findSurfaceRef(JSON.parse(trimmed));
+    if (ref) return ref;
+  } catch {}
+  const legacy = trimmed.match(/surface:\d+/)?.[0];
+  if (legacy) return legacy;
+  const uuid = trimmed.match(/[0-9a-f]{8}-[0-9a-f-]{27,}/i)?.[0];
+  if (uuid) return uuid;
+  throw new Error(`Unexpected cmux ${command} output: ${trimmed}`);
+}
+
 export const __test__ = {
   parentSurfaceForSplit,
+  cmuxCliMode,
+  parseCmuxSurface,
   getCmuxSubagentPane: () => cmuxSubagentPane,
   setCmuxSubagentPane: (pane: string | null) => {
     cmuxSubagentPane = pane;
@@ -232,8 +285,9 @@ export const __test__ = {
  */
 export function createSurface(name: string): string {
   const backend = getMuxBackend();
+  const isLegacyCmux = backend === "cmux" && cmuxCliMode() === "legacy";
 
-  if (backend === "cmux" && cmuxSubagentPane) {
+  if (isLegacyCmux && cmuxSubagentPane) {
     // Verify the pane still exists before adding a tab to it
     if (cmuxPaneExists(cmuxSubagentPane)) {
       return createSurfaceInPane(name, cmuxSubagentPane);
@@ -249,8 +303,9 @@ export function createSurface(name: string): string {
   // See https://github.com/HazAT/pi-interactive-subagents/issues/12
   const surface = createSurfaceSplit(name, "right", parentSurfaceForSplit(backend));
 
-  // For cmux, remember the pane so future subagents become tabs in it
-  if (backend === "cmux") {
+  // For legacy cmux, remember the pane so future subagents become tabs in it.
+  // Modern cmux exposes split surfaces, but not the old pane/tab commands.
+  if (isLegacyCmux) {
     try {
       const info = execSyncImpl(`cmux identify --surface ${shellEscape(surface)}`, {
         encoding: "utf8",
@@ -296,15 +351,20 @@ export function createSurfaceSplit(
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {
+    if (cmuxCliMode() === "modern") {
+      const directionArg = direction === "left" || direction === "right" ? "horizontal" : "vertical";
+      const idArg = fromSurface ? ` --id ${shellEscape(fromSurface)}` : "";
+      const out = execSyncImpl(`cmux split --direction ${directionArg}${idArg} --json`, {
+        encoding: "utf8",
+      });
+      return parseCmuxSurface(out, "split");
+    }
+
     const surfaceArg = fromSurface ? ` --surface ${shellEscape(fromSurface)}` : "";
     const out = execSyncImpl(`cmux new-split ${direction}${surfaceArg}`, {
       encoding: "utf8",
-    }).trim();
-    const match = out.match(/surface:\d+/);
-    if (!match) {
-      throw new Error(`Unexpected cmux new-split output: ${out}`);
-    }
-    const surface = match[0];
+    });
+    const surface = parseCmuxSurface(out, "new-split");
     execSyncImpl(`cmux rename-tab --surface ${shellEscape(surface)} ${shellEscape(name)}`, {
       encoding: "utf8",
     });
@@ -410,6 +470,10 @@ export function renameCurrentTab(title: string): void {
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {
+    if (cmuxCliMode() === "modern") {
+      // Modern cmux has workspace renaming but no tab/surface rename command.
+      return;
+    }
     const surfaceId = process.env.CMUX_SURFACE_ID;
     if (!surfaceId) throw new Error("CMUX_SURFACE_ID not set");
     execSyncImpl(`cmux rename-tab --surface ${shellEscape(surfaceId)} ${shellEscape(title)}`, {
@@ -458,6 +522,14 @@ export function renameWorkspace(title: string): void {
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {
+    if (cmuxCliMode() === "modern") {
+      const workspaceId = process.env.CMUX_WORKSPACE_ID ?? process.env.CMUX_WORKSPACE;
+      if (!workspaceId) return;
+      execSyncImpl(`cmux rename-workspace ${shellEscape(workspaceId)} ${shellEscape(title)}`, {
+        encoding: "utf8",
+      });
+      return;
+    }
     execSyncImpl(`cmux workspace-action --action rename --title ${shellEscape(title)}`, {
       encoding: "utf8",
     });
@@ -511,6 +583,12 @@ export function sendCommand(surface: string, command: string): void {
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {
+    if (cmuxCliMode() === "modern") {
+      execSyncImpl(`cmux send-text --id ${shellEscape(surface)} ${shellEscape(command + "\n")}`, {
+        encoding: "utf8",
+      });
+      return;
+    }
     execSyncImpl(`cmux send --surface ${shellEscape(surface)} ${shellEscape(command + "\n")}`, {
       encoding: "utf8",
     });
@@ -543,6 +621,10 @@ export function sendEscape(surface: string): void {
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {
+    if (cmuxCliMode() === "modern") {
+      execFileSync("cmux", ["send-text", "--id", surface, "\u001b"], { encoding: "utf8" });
+      return;
+    }
     execFileSync("cmux", ["send", "--surface", surface, "\u001b"], { encoding: "utf8" });
     return;
   }
@@ -607,6 +689,10 @@ export function readScreen(surface: string, lines = 50): string {
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {
+    if (cmuxCliMode() === "modern") {
+      const raw = execSyncImpl(`cmux read-text --id ${shellEscape(surface)}`, { encoding: "utf8" });
+      return tailLines(raw, lines);
+    }
     return execSyncImpl(`cmux read-screen --surface ${shellEscape(surface)} --lines ${lines}`, {
       encoding: "utf8",
     });
@@ -650,6 +736,14 @@ export async function readScreenAsync(surface: string, lines = 50): Promise<stri
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {
+    if (cmuxCliMode() === "modern") {
+      const { stdout } = await execFileAsync(
+        "cmux",
+        ["read-text", "--id", surface],
+        { encoding: "utf8" },
+      );
+      return tailLines(stdout, lines);
+    }
     const { stdout } = await execFileAsync(
       "cmux",
       ["read-screen", "--surface", surface, "--lines", String(lines)],
@@ -693,6 +787,10 @@ export function closeSurface(surface: string): void {
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {
+    if (cmuxCliMode() === "modern") {
+      execSyncImpl(`cmux close-surface ${shellEscape(surface)}`, { encoding: "utf8" });
+      return;
+    }
     execSyncImpl(`cmux close-surface --surface ${shellEscape(surface)}`, {
       encoding: "utf8",
     });
