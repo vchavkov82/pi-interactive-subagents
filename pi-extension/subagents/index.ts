@@ -997,6 +997,7 @@ export const __test__ = {
   requestSubagentInterrupt,
   handleSubagentInterrupt,
   resolveResultPresentation,
+  closeSurfaceIfPresent,
   runningSubagents,
 };
 
@@ -1400,10 +1401,17 @@ function readScreenIfPresent(surface: string, lines: number): string {
   }
 }
 
-function closeSurfaceIfPresent(surface: string): void {
+function closeSurfaceIfPresent(
+  surface: string,
+  closeFn: (surface: string) => void = closeSurface,
+  warn: (message: string) => void = console.warn,
+): void {
   try {
-    closeSurface(surface);
-  } catch {}
+    closeFn(surface);
+  } catch (err: any) {
+    const message = err?.message ?? String(err);
+    warn(`Failed to close subagent surface ${surface}: ${message}`);
+  }
 }
 
 async function watchSubagent(

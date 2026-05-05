@@ -700,6 +700,40 @@ describe("status.ts", () => {
   });
 });
 
+describe("subagent surface cleanup", () => {
+  const testApi = (subagentsModule as any).__test__;
+
+  it("reports close failures instead of silently swallowing them", () => {
+    const warnings: string[] = [];
+
+    testApi.closeSurfaceIfPresent(
+      "surface-uuid",
+      () => {
+        throw new Error("cmux close failed");
+      },
+      (message: string) => warnings.push(message),
+    );
+
+    assert.deepEqual(warnings, ["Failed to close subagent surface surface-uuid: cmux close failed"]);
+  });
+
+  it("does not warn when surface close succeeds", () => {
+    let closedSurface = "";
+    const warnings: string[] = [];
+
+    testApi.closeSurfaceIfPresent(
+      "surface-uuid",
+      (surface: string) => {
+        closedSurface = surface;
+      },
+      (message: string) => warnings.push(message),
+    );
+
+    assert.equal(closedSurface, "surface-uuid");
+    assert.deepEqual(warnings, []);
+  });
+});
+
 describe("subagent discovery", () => {
   const testApi = (subagentsModule as any).__test__;
 
