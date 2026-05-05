@@ -200,6 +200,11 @@ function cmuxCliMode(): CmuxCliMode {
   }
 }
 
+function cmuxCommand(command: string): string {
+  const socket = process.env.CMUX_SOCKET ?? process.env.CMUX_SOCKET_PATH;
+  return socket ? `cmux --socket ${shellEscape(socket)} ${command}` : `cmux ${command}`;
+}
+
 function parentSurfaceForSplit(backend: MuxBackend | null): string | undefined {
   if (backend === "cmux") return process.env.CMUX_SURFACE_ID ?? process.env.CMUX_SURFACE;
   if (backend === "tmux") return process.env.TMUX_PANE;
@@ -788,7 +793,7 @@ export function closeSurface(surface: string): void {
 
   if (backend === "cmux") {
     if (cmuxCliMode() === "modern") {
-      execSyncImpl(`cmux close-surface ${shellEscape(surface)}`, { encoding: "utf8" });
+      execSyncImpl(`${cmuxCommand("close-surface")} ${shellEscape(surface)}`, { encoding: "utf8" });
       return;
     }
     execSyncImpl(`cmux close-surface --surface ${shellEscape(surface)}`, {

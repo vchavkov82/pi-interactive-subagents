@@ -18,7 +18,7 @@ import {
   seedSubagentSessionFile,
 } from "../pi-extension/subagents/session.ts";
 
-import { shellEscape, isCmuxAvailable, isWezTermAvailable, createSurface, renameCurrentTab, renameWorkspace, __test__ as cmuxTestApi } from "../pi-extension/subagents/cmux.ts";
+import { shellEscape, isCmuxAvailable, isWezTermAvailable, createSurface, closeSurface, renameCurrentTab, renameWorkspace, __test__ as cmuxTestApi } from "../pi-extension/subagents/cmux.ts";
 import {
   advanceStatusState,
   capStatusLines,
@@ -1671,6 +1671,32 @@ describe("cmux.ts", () => {
       } finally {
         process.env = oldEnv;
         cmuxTestApi.setCmuxSubagentPane(null);
+        cmuxTestApi.resetCommandAvailability();
+        cmuxTestApi.resetExecSync();
+      }
+    });
+
+    it("closes modern cmux surfaces with the discovered socket path", () => {
+      const oldEnv = { ...process.env };
+      const commands: string[] = [];
+
+      try {
+        process.env.PI_SUBAGENT_MUX = "cmux";
+        process.env.CMUX_SOCKET_PATH = "/tmp/cmux.sock";
+        delete process.env.CMUX_SOCKET;
+        cmuxTestApi.resetCommandAvailability();
+        cmuxTestApi.setExecSync(((command: string) => {
+          commands.push(command);
+          if (command === "command -v cmux") return "cmux";
+          if (command === "cmux --help") return "Commands:\n  split\n  close-surface\n";
+          if (command === "cmux --socket '/tmp/cmux.sock' close-surface 'surface-uuid'") return "";
+          throw new Error(`unexpected command: ${command}`);
+        }) as any);
+
+        closeSurface("surface-uuid");
+        assert.ok(commands.includes("cmux --socket '/tmp/cmux.sock' close-surface 'surface-uuid'"));
+      } finally {
+        process.env = oldEnv;
         cmuxTestApi.resetCommandAvailability();
         cmuxTestApi.resetExecSync();
       }
